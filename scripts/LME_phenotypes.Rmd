@@ -1,0 +1,74 @@
+---
+title: "STR length variation associated with phenotype"
+output: html_notebook
+---
+Read in the phenotype data and merge with the experiment types
+
+```{r}
+library(tidyverse)
+
+pheno <- read_csv("data/MergedPhenotypes.csv",col_names = FALSE) %>% 
+  arrange(X1) %>% 
+  rename(EXPERIMENT = X1,
+         ECOTYPE = X2,
+         NAME = X3,
+         CS_CODE = X4,
+         LONGITUDE = X5,
+         LATITUDE = X6,
+         COUNTRY = X7,
+         PHENO_SCORE = X8)
+
+pheno_exp_types <- read_delim(delim = ';',"data/pheno_experiments_non_binary.csv")
+
+
+pheno %>% 
+  filter(EXPERIMENT %in% pheno_summary_non_binary$EXPERIMENT) %>% 
+  .$EXPERIMENT %>% 
+  unique() %>%
+  as_data_frame() %>%
+  write_csv(., path = "data/pheno_experiments_non_binary.csv")
+
+```
+
+Run the scripts pheno_LME_mergedgroups.R and pheno_LME_mergedgroups_control.R using GNU parallel (https://www.gnu.org/software/parallel/). Depending on your cluster, choose arguments to the scripts to divide the number out of 225 phenotype experiments to be analysed,
+```{bash}
+parallel --progress \
+'Rscript scripts/pheno_LME_mergedgroups.R {}' \
+::: {"1 225"}
+```
+
+```{bash}
+parallel --progress \
+'Rscript scripts/pheno_LME_mergedgroups_control.R {}' \
+::: {"1 225"}
+```
+
+Reading in the data from the tests and do p-value correction.
+
+```{r}
+lmeResDF_pheno_file_list <- list.files(
+  "data/phenotypes/observed/",
+  pattern = 'csv$',
+  full.names = TRUE
+)
+
+lmeResDF_pheno_control_file_list <- list.files(
+  "data/phenotypes/negative_controls/",
+  pattern = 'csv$',
+  full.names = TRUE
+)
+
+pheno_results_control_df_list <- lmeResDF_pheno_control_file_list %>%
+  map(~read_csv(.)) 
+
+pheno_binary_results_df_list <- lmeResDF_pheno_binary_file_list %>% 
+  map(~read_csv(.))
+
+p_adjusted_pheno_results_df_list <- pheno_results_df_list %>% 
+  map(function(x) filter(x,Where != "NON_GENIC") %>%
+  mutate(.,adj.p_value = p.adjust(.$p_value, method = "BH")) %>%
+  filter(adj.p_value < 0.05))
+
+
+
+```

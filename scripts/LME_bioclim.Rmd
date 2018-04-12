@@ -1,0 +1,106 @@
+---
+title: "STR length variation associated with bioclimatic variables"
+output: html_notebook
+---
+
+Run in bash - requires GNU parallel (https://www.gnu.org/software/parallel/)
+```{bash}
+parallel --progress \
+'Rscript scripts/BioClim_LME_mergedgroups.R {}' \
+::: {"PROMOTER" "FIVE_PRIME_UTR" "CDS" "INTRON" "THREE_PRIME_UTR" "SPANNING" "INTERGENIC"}
+```
+
+```{bash}
+parallel --progress \
+'Rscript scripts/BioClim_LME_mergedgroups_control.R {}' \
+::: {"PROMOTER" "FIVE_PRIME_UTR" "CDS" "INTRON" "THREE_PRIME_UTR" "SPANNING" "INTERGENIC"}
+```
+
+
+Read in the data from running BioClim_LME_mergedgroups.R
+```{r}
+library(tidyverse)
+
+allGenesAllAccnoNAFilt <- read_csv("data/allGenesAllAccnoNAFilt.csv") %>%
+	mutate(GROUP = if_else(GROUP %in% c("admixed",
+								  "south_sweden",
+								  "central_europe",
+								  "western_europe",
+								  "spain",
+								  "italy_balkan_caucasus"),
+					 "merged",
+					 GROUP))
+
+lmeResDF_bioclim_mergedgroups <-  bind_rows(
+  read_csv(file = "data/LMEResDF_mergedgroups_PROMOTER.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_FIVE_PRIME_UTR.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_CDS.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_INTRON.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_SPANNING.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_THREE_PRIME_UTR.csv"),
+  read_csv(file = "data/LMEResDF_mergedgroups_NON_GENIC.csv")
+  )
+
+lmeResDF_bioclim_mergedgroups_ctrl <- 
+  bind_rows(
+    read_csv(file = "data/LMEResDF_mergedgroups_control_PROMOTER.csv"),
+    read_csv(file = "data/LMEResDF_mergedgroups_control_FIVE_PRIME_UTR.csv"),
+    read_csv(file = "data/LMEResDF_mergedgroups_control_CDS.csv"),
+    read_csv(file = "data/LMEResDF_mergedgroups_control_INTRON.csv"),
+    read_csv(file = "data/LMEResDF_mergedgroups_control_SPANNING.csv"),
+    read_csv(file = "data/LMEResDF_mergedgroups_control_NON_GENIC.csv"),
+  )
+
+
+lmeResDF_bioclim_mergedgroups <- allGenesAllAccnoNAFilt %>%
+  select(CHR_START, WHERE, Closest) %>% 
+  distinct() %>%
+  inner_join(., lmeResDF_bioclim_mergedgroups, by = c("CHR_START"  = "Start")) %>% 
+  mutate(Gene = if_else(Gene == "None", Closest, Gene))
+
+
+lmeResDF_bioclim_mergedgroups_ctrl <- allGenesAllAccnoNAFilt %>%
+  select(CHR_START, WHERE, Closest) %>% 
+    distinct() %>%
+  inner_join(., lmeResDF_bioclim_mergedgroups_ctrl, by = c("CHR_START"  = "Start")) %>% 
+  mutate(Gene = if_else(Gene == "None", Closest, Gene))
+
+
+
+```
+
+p-value plotting to validate modelling
+```{r}
+p_value_histograms_mergedgroups <- lmeResDF_bioclim_mergedgroups %>% 
+  group_by(WHERE) %>% 
+  do(plots = ggplot(data = ., aes(p_value))+
+       geom_histogram()+
+       ggtitle(unique(.$WHERE)))
+
+p_value_histograms_mergedgroups$plots
+
+p_value_histograms_mergedgroups_ctrl <- lmeResDF_bioclim_mergedgroups_ctrl %>% 
+  group_by(WHERE) %>% 
+  do(plots = ggplot(data = ., aes(p_value))+
+       geom_histogram()+
+       ggtitle(unique(.$WHERE)))
+
+p_value_histograms_mergedgroups_ctrl$plots
+
+write_csv(lmeResDF_bioclim_mergedgroups,
+          path = "data/lmeResDF_mergedgroups.csv")
+
+write_csv(lmeResDF_bioclim_mergedgroups_ctrl,
+          path = "data/lmeResDF_mergedgroups_control.csv")
+```
+
+p-value correction and filtering
+```{r}
+p_adjustedLmeResDF_bioclim_mergedgroups <- lmeResDF_bioclim_mergedgroups %>% 
+  group_by(WHERE) %>%
+  do(.,mutate(.,adj.p_value = p.adjust(.$p_value, method = "BH"))) %>%
+  filter(adj.p_value < 0.05) %>%
+  ungroup()
+
+```
+

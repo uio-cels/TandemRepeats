@@ -1,0 +1,185 @@
+---
+title: "STR variants with bioclimatic data"
+output: html_notebook
+---
+First import a dataframe containing the results from running loBSTR on the 1135 A. thaliana genomes and combine these with the accession info from the 1001 genomes.
+
+```{r}
+library(tidyverse)
+
+
+#read in STR dataframe
+allGenesAllAcc <- read_tsv('data/STRs_depth5_chr_start_maf09.annotated.tsv',
+      col_names = TRUE
+    ) 
+
+allGenesAllAcc <- allGenesAllAcc %>% 
+  filter(UNIT_N <4) %>%
+  mutate(LEN_REF = nchar(REF),GENE = if_else(is.na(GENE), "None", GENE)) %>%
+  rename(SUM_VAR = STR_DOSAGE) %>%
+  select(-GENE2)
+  
+
+#read in accession info
+{
+  accInfo <- read.table(
+    file = 'data/Accessioninfo.tab',
+    sep = '\t',
+    header = T) %>% 
+    dplyr::select(-1) %>%
+    rename(LATITUDE = latitude, LONGITUDE = longitude, ECOTYPE = Ecotype) %>% 
+    na.omit()
+  
+  #read in population and accession group info
+  popGroups <-
+    read.table(
+      "data/1135_genomes_population_groups.txt",
+      sep = '\t',
+      header = T
+    ) %>%
+    rename(GROUP = group)
+  
+  accInfoGroups <- left_join(accInfo, popGroups, by = c('ECOTYPE' = 'ID'))
+  
+  #read file of possible erroneous stocks
+  NASC_err <- read.table(file = 'analysis/Ecotype_data/uncertain_stocks.csv',
+                       stringsAsFactors = FALSE, 
+                       header = TRUE, 
+                       sep = ';') %>%
+  mutate(ABRC.stock.number = substring(.[,1], first = 3, last = 30)) %>% 
+  as_tibble()
+
+  accInfoGroups <- accInfoGroups %>% filter(!ECOTYPE %in% NASC_err$ecotype_id)
+  }
+
+#merge the DFs
+allGenesAllAcc <- inner_join(allGenesAllAcc, accInfoGroups, by = c("ACCESSION" = "Run_s")) %>%
+  select(ECOTYPE,GENE,START,END,WHERE, CHR_START, Closest,CHR,ACCESSION,DEPTH,UNIT,UNIT_N,REF,LEN_REF,ALTVAR1,LEN_ALTVAR1,ALTVAR2,LEN_ALTVAR2,GROUP,LATITUDE,LONGITUDE
+         )
+
+
+
+allGenesAllAccnoNAFilt <- 
+  mutate(allGenesAllAcc,
+         LATITUDE = signif(round(LATITUDE, 1)),
+         LONGITUDE = signif(round(LONGITUDE, 1)))
+rm(allGenesAllAcc)
+write_csv(allGenesAllAccnoNAFilt, path = "data/allGenesAllAccnoNAFilt.csv")
+
+```
+
+Make a data frame from the bioclimatic variables from worldclim.org. 
+  (downloaded as a zip archive containing .tif files for each bioclimatic variable, or as monthly observations, at 2.5 arc-minutes resolution)
+
+```{r}
+library(raster)
+library(rgdal)
+
+#read in list of bioclimatic data files
+rasterFiles <-
+  list.files(
+    "data/Geodata/wc2.0_2.5m_bio/",
+    pattern = 'tif$',
+    full.names = TRUE
+  )
+
+tempRasterList <- lapply(rasterFiles, function(i) 
+  raster(i) %>% 
+    rasterToPoints %>% 
+    as_data_frame)
+
+bioClim <- tempRasterList %>% reduce(bind_cols)
+
+bioClimNames <- read_csv(file = "data/Geodata/BioClimNames_1.txt") 
+
+
+colnames(bioClim) <- colnames(bioClimNames)
+
+
+
+#Select only data from the norhtern hemisphere
+
+bioClim.comb.uniq <- bioClim %>% 
+  filter(LATITUDE > 0 & LATITUDE < 80) %>% 
+  mutate(LATITUDE = signif(round(LATITUDE, 1)),
+         LONGITUDE = signif(round(LONGITUDE, 1))) %>% group_by(LATITUDE, LONGITUDE) %>%
+  summarise_all(funs(mean(., na.rm = TRUE)))
+
+```
+
+Make bioclimatic variables of the bioclim measurements for humidity, solar radiation and wind and merge with the other variables
+
+```{r}
+rasterFiles2 <-
+  list.files(
+    "data/Geodata/wc2.0",
+    pattern = 'tif$',
+    full.names = TRUE
+  )
+
+tempRasterList <- lapply(rasterFiles2, function(i) 
+  raster(i) %>% 
+    rasterToPoints %>% 
+    as_data_frame)
+
+bioClim2 <- tempRasterList %>% reduce(bind_cols) %>% 
+  dplyr::select(1,2, starts_with("wc2.0"))
+
+bioClim2 <- bioClim2 %>% 
+  filter(y > 0 & y < 80) %>% 
+  dplyr::select(1,2,15:26,63:86) %>% 
+  dplyr::rename(LONGITUDE = x, LATITUDE = y) %>% 
+  mutate(LATITUDE = signif(round(LATITUDE, 1)),
+         LONGITUDE = signif(round(LONGITUDE, 1)))
+{
+  bioClim2$BIO_ANNUAL_MEAN_SOLAR_RAD <- apply(bioClim2[,3:14], 1, mean)
+  bioClim2$BIO_ANNUAL_MEAN_VAPOR_PRESSURE <- apply(bioClim2[,15:26], 1, mean)
+  bioClim2$BIO_MAX_SOLAR_RAD_BRIGHTEST_MONTH <- apply(bioClim2[,3:14], 1, max)
+  bioClim2$BIO_MIN_SOLAR_RAD_DARKEST_MONTH <- apply(bioClim2[,3:14], 1, min)
+  bioClim2$BIO_MAX_VAPOR_PRESSURE_MOST_HUMID_MONTH <- apply(bioClim2[,15:26], 1, max)
+  bioClim2$BIO_MIN_VAPOR_PRESSURE_LEAST_HUMID_MONTH <- apply(bioClim2[,15:26], 1, min)
+}
+
+bioClim2.uniq <- bioClim2 %>%
+  dplyr::select( 2,1,39:44) %>% 
+  group_by(LATITUDE, LONGITUDE) %>%
+  summarise_all(funs(mean(., na.rm = TRUE)))
+
+c(head(bioClim.comb.uniq), head(bioClim2.uniq)) %>% reduce(bind_cols)
+
+bioClimFinal <- inner_join(bioClim.comb.uniq,bioClim2.uniq)
+
+write_csv(bioClimFinal,
+            path = 'data/Geodata/wc2.0/worldclim2.0_Final_dataframe.csv',
+            col_names = TRUE
+)
+
+rm(bioClimFinal)
+```
+
+Join the variant calling and accession data frames with the bioclimatic data to get a working data frame and filter this frame on allele frequencies
+
+```{r}
+bioClimFinal <- read_csv(
+  file = 'data/Geodata/wc2.0/worldclim2.0_Final_dataframe.csv',
+  col_names = TRUE
+  )
+
+allGenesAllAccBioClim <-
+  left_join(
+    allGenesAllAccnoNAFilt,
+    bioClimFinal,
+    by = c('LATITUDE', 'LONGITUDE')
+  )
+rm(bioClimFinal)
+
+allGenesAllAccBioClim <- allGenesAllAccBioClim %>%
+  rowwise() %>%
+  mutate(SUM_VAR = sum(c(LEN_ALTVAR1, LEN_ALTVAR2))) %>% 
+  as_data_frame() %>%
+  select(1:19, SUM_VAR, everything())
+
+write_csv(allGenesAllAccBioClim,"data/AllGenesAllAccBioClim.csv")
+
+```
+
